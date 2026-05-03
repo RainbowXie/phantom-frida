@@ -1111,6 +1111,23 @@ Detection vectors covered:
             log(f"Removing stale {build_dir} before reconfigure", "INFO")
             shutil.rmtree(build_dir, ignore_errors=True)
 
+        # apply_post_build_patches' frida_agent_main rename is persisted to
+        # source (e.g. lib/agent/meson.build's `-Wl,-exported_symbol,_*` line).
+        # Vala regenerates the agent.c each fresh build with the original
+        # `frida_agent_main` symbol (Vala source defines namespace Frida.Agent
+        # which we don't rename). With meson.build pinning the renamed symbol
+        # but Vala emitting the original name, the next arch's first link
+        # fails: `Undefined symbols ... -Wl,-exported_symbol,_<name>_agent_main`.
+        # Revert to the original symbol name in source before each arch — the
+        # post_build phase will re-apply the rename for this arch's binaries.
+        if any(p.is_file() for p in frida_dir.rglob("meson.build")):
+            reverted = replace_in_tree(
+                frida_dir, f"{custom_name}_agent_main", "frida_agent_main",
+                include_build=False,
+            )
+            if reverted:
+                log(f"Reverted {custom_name}_agent_main -> frida_agent_main in source ({reverted})", "INFO")
+
         # Configure
         configure_arch(frida_dir, arch, ndk_path)
 
