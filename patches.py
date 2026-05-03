@@ -56,14 +56,32 @@ def get_source_patches(name: str, cap_name: str) -> list[tuple[str, str]]:
         ('"/frida-"', f'"/{name}-"'),
 
         # --- Agent references (various quoting styles in Vala/C/Meson) ---
-        # More specific first to avoid partial matches
+        # More specific first to avoid partial matches.
+        # The .dylib/.so/.dll suffix forms are required because src/embed-agent.py
+        # uses the bare filenames `priv_dir / "frida-agent.dylib"` (iOS) and
+        # `"frida-agent.so"` (FreeBSD) — neither matches the bare `"frida-agent"`
+        # double-quoted pattern. Without these renames the agent blob filename
+        # stays `frida-agent.dylib`, the resource compiler emits
+        # `Frida.Data.Agent.get_frida_agent_dylib_blob`, but the consumer call in
+        # darwin-host-session.vala has been renamed to `get_<name>_agent_dylib_blob`,
+        # producing a Vala compile error.
         ('"agent" / "frida-agent.', f'"agent" / "{name}-agent.'),
+        ("frida-agent.dylib", f"{name}-agent.dylib"),
+        ("frida-agent.so", f"{name}-agent.so"),
+        ("frida-agent.dll", f"{name}-agent.dll"),
         ("'frida-agent'", f"'{name}-agent'"),
         ('"frida-agent"', f'"{name}-agent"'),
         ("frida-agent-", f"{name}-agent-"),
         ("get_frida_agent_", f"get_{name}_agent_"),
         ("'FridaAgent'", f"'{cap_name}Agent'"),
         ('"FridaAgent"', f'"{cap_name}Agent"'),
+
+        # --- Gadget filename references with dot-suffix ---
+        # Same rationale as the agent block above. Bare `"frida-gadget"` pattern
+        # would not catch e.g. `"frida-gadget.dylib"`.
+        ("frida-gadget.dylib", f"{name}-gadget.dylib"),
+        ("frida-gadget.so", f"{name}-gadget.so"),
+        ("frida-gadget.dll", f"{name}-gadget.dll"),
 
         # --- JS engine thread name (visible in /proc/pid/task/tid/status) ---
         ('"gum-js-loop"', f'"{name}-js-loop"'),
