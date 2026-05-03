@@ -1,0 +1,185 @@
+name: Build iOS dylib
+
+on:
+  workflow_dispatch:
+    inputs:
+      frida_version:
+        description: 'Frida version (e.g. 17.7.2)'
+        required: true
+        default: '17.7.2'
+      custom_name:
+        description: 'Custom name (replaces "frida" everywhere)'
+        required: true
+        default: 'ajeossida'
+      arch:
+        description: 'Target iOS architecture(s)'
+        required: true
+        default: 'ios-arm64,ios-arm64e'
+        type: choice
+        options:
+          - ios-arm64
+          - ios-arm64e
+          - ios-arm64,ios-arm64e
+      port:
+        description: 'Custom port (empty = keep 27042)'
+        required: false
+        default: ''
+      extended:
+        description: 'Extended anti-detection (D-Bus, symbols, binary sweep, ObjC class renames)'
+        required: false
+        type: boolean
+        default: true
+      temp_fixes:
+        description: 'Stability fixes (perfetto skip, cloak detach)'
+        required: false
+        type: boolean
+        default: false
+
+jobs:
+  build:
+    runs-on: macos-14
+    timeout-minutes: 120
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: System info
+        run: |
+          sw_vers
+          xcodebuild -version
+          xcrun --sdk iphoneos --show-sdk-path
+          xcrun --sdk iphoneos --show-sdk-version
+          echo "CPUs: $(sysctl -n hw.ncpu)"
+          echo "RAM: $(sysctl -n hw.memsize | awk '{print $1/1024/1024/1024" GB"}')"
+          echo "Disk free: $(df -h / | tail -1 | awk '{print $4}')"
+          python3 --version
+          git --version
+
+      - name: Install build deps
+        run: |
+          # macos-14 has Homebrew preinstalled; meson + pkg-config are required by Frida
+          brew install meson pkg-config
+
+      # Cache Frida source tree — saves ~5 min clone time across runs
+      - name: Cache Frida source
+        uses: actions/cache@v4
+        id: frida-cache
+        with:
+          path: build/frida
+          key: frida-${{ inputs.frida_version }}-source-ios
+
+      - name: Clone Frida
+        if: steps.frida-cache.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p build
+          git clone --recurse-submodules --branch ${{ inputs.frida_version }} --depth 1 \
+            https://github.com/frida/frida.git build/frida
+
+      # If cache hit, restore to clean state (patches are destructive)
+      - name: Reset cached source
+        if: steps.frida-cache.outputs.cache-hit == 'true'
+        run: |
+          cd build/frida
+          git checkout -- .
+          git submodule foreach --recursive 'git checkout -- . || true'
+          git clean -fdx || true
+          rm -rf build/
+
+      - name: Build command
+        id: cmd
+        run: |
+          CMD="python3 build.py --version ${{ inputs.frida_version }}"
+          CMD="$CMD --name ${{ inputs.custom_name }}"
+          CMD="$CMD --arch ${{ inputs.arch }}"
+          CMD="$CMD --skip-clone"
+          CMD="$CMD --verify"
+
+          if [ -n "${{ inputs.port }}" ]; then
+            CMD="$CMD --port ${{ inputs.port }}"
+          fi
+
+          if [ "${{ inputs.extended }}" = "true" ]; then
+            CMD="$CMD --extended"
+          fi
+
+          if [ "${{ inputs.temp_fixes }}" = "true" ]; then
+            CMD="$CMD --temp-fixes"
+          fi
+
+          echo "cmd=$CMD" >> $GITHUB_OUTPUT
+          echo "Will run: $CMD"
+
+      - name: Apply patches and build
+        run: ${{ steps.cmd.outputs.cmd }}
+
+      - name: List artifacts
+        run: |
+          echo "=== Build artifacts ==="
+          ls -lh output/
+
+      - name: Mach-O verification
+        run: |
+          echo "=== File types ==="
+          for f in output/*; do
+            case "$f" in
+              *.gz) ;;
+              *) file "$f" ;;
+            esac
+          done
+
+          echo ""
+          echo "=== install_name (LC_ID_DYLIB) ==="
+          for f in output/*.dylib; do
+            [ -f "$f" ] || continue
+            id=$(otool -D "$f" | tail -n +2)
+            echo "$f -> $id"
+            case "$id" in
+              *frida*|*Frida*) echo "  WARN: install_name still contains frida"; exit 1 ;;
+            esac
+          done
+
+          echo ""
+          echo "=== Codesign status ==="
+          for f in output/*.dylib output/*-server-ios-*; do
+            [ -f "$f" ] || continue
+            codesign -dv "$f" 2>&1 | grep -E 'Signature|Identifier' || echo "  $f: unsigned"
+          done
+
+          echo ""
+          echo "=== Residual frida/Frida/FRIDA bytes ==="
+          for f in output/*.dylib output/*-server-ios-*; do
+            [ -f "$f" ] || continue
+            count_frida=$(strings "$f" | grep -c -E '\bfrida\b' || true)
+            count_Frida=$(strings "$f" | grep -c -E '\bFrida[A-Z]' || true)
+            count_sym=$(nm -gU "$f" 2>/dev/null | grep -c -E '_(frida|Frida|FRIDA)' || true)
+            echo "$(basename "$f"): strings frida=$count_frida Frida*=$count_Frida nm-symbols=$count_sym"
+          done
+
+      - name: Upload gadget artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.custom_name }}-gadget-ios-${{ inputs.frida_version }}
+          path: |
+            output/*-gadget-ios-*.dylib
+            output/*-gadget-ios-*.dylib.gz
+          retention-days: 30
+          if-no-files-found: warn
+
+      - name: Upload server artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.custom_name }}-server-ios-${{ inputs.frida_version }}
+          path: |
+            output/*-server-ios-*
+            !output/*-server-ios-*.gz
+          retention-days: 30
+          if-no-files-found: warn
+
+      - name: Upload server (compressed)
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.custom_name }}-server-ios-${{ inputs.frida_version }}-gz
+          path: output/*-server-ios-*.gz
+          retention-days: 30
+          if-no-files-found: ignore

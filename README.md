@@ -1,6 +1,6 @@
 # phantom-frida
 
-Build anti-detection Frida server from source. Covers 16 detection vectors with ~90 patches.
+Build anti-detection Frida server from source. Covers 16 Android detection vectors with ~90 patches, plus an iOS path producing phantom-ised gadget dylib + server (Mach-O `install_name` rewrite, ad-hoc codesign, symbol-table sweep).
 
 Extended beyond [ajeossida](https://github.com/hackcatml/ajeossida) with additional stealth techniques: custom port, binary string sweep, internal symbol renaming, temp path obfuscation, and more.
 
@@ -14,10 +14,11 @@ Standard Frida client (`pip install frida-tools`) connects to the patched server
 
 ### GitHub Actions (recommended)
 
-1. Fork this repo
-2. Actions > **Build Custom Frida** > Run workflow
-3. Choose version, name, architecture, options
-4. Download artifacts (~8 min with cache, ~35 min cold build)
+**Android** — Actions > **Build Custom Frida** > Run workflow (runs on `ubuntu-22.04` with NDK r29).
+
+**iOS** — Actions > **Build iOS dylib** > Run workflow (runs on `macos-14` with Xcode CLT). Defaults to `ios-arm64,ios-arm64e`.
+
+Both fork-then-trigger. Artifacts ready in ~8 min with cache, ~35 min cold.
 
 ### Weekly auto-builds
 
@@ -49,6 +50,17 @@ FRIDA_VERSION=17.7.2 CUSTOM_NAME=myserver CUSTOM_PORT=27142 EXTENDED=1 \
   wsl -d Ubuntu bash build-wsl.sh
 ```
 
+### Local iOS build (macOS only)
+
+iOS targets need Xcode CLT (`xcode-select --install`) and Homebrew `meson` + `pkg-config`. Linux can't cross-compile against the iphoneos SDK.
+
+```bash
+brew install meson pkg-config
+python3 build.py --version 17.7.2 --arch ios-arm64,ios-arm64e --extended
+```
+
+Output: `output/<name>-gadget-17.7.2-ios-{arm64,arm64e}.dylib` and `output/<name>-server-17.7.2-ios-{arm64,arm64e}` — both ad-hoc signed, ready for Dopamine / iOS 16 rootless.
+
 ## Detection Vectors
 
 | # | Vector | Detection method | Base | Extended |
@@ -70,6 +82,25 @@ FRIDA_VERSION=17.7.2 CUSTOM_NAME=myserver CUSTOM_PORT=27142 EXTENDED=1 \
 | 15 | Build config defines | Memory scan | - | Renamed |
 | 16 | Asset directory `libdir/frida` | Path inspection | - | Renamed |
 
+### iOS-specific vectors
+
+The 16 Android vectors above use `gum-linux` / `linjector` / SELinux / DEX paths that don't exist on iOS. iOS targets cover the cross-platform vectors plus an iOS-specific subset:
+
+| # | Vector | Detection method | Coverage |
+|---|--------|-----------------|----------|
+| i1 | Mach-O `LC_ID_DYLIB` install_name | `dlopen` / dyld image enumeration | `install_name_tool -id @rpath/lib<name>-gadget.dylib` |
+| i2 | ObjC class names `Frida*`, `FridaGadget.dylib` plist | `objc_getClass` / Bundle plist scan | Source patches (extended) |
+| i3 | Mach-O symbol table `_frida_*` / `_FRIDA_*` / `_Frida*` | `nm` / runtime `dlsym` | `nm`-driven length-preserving byte sweep |
+| i4 | `re.frida.*` Mach service names | XPC / Mach lookup | Source patches (cross-platform) |
+| i5 | Process name `frida-server` | `ps`, `proc_listpids` | Renamed via file rename |
+| i6 | Code signature mismatch | `codesign -dv` | Re-signed ad-hoc after every modification |
+
+Not yet covered (planned):
+
+- Active dyld image hiding (intercept `_dyld_image_count` / `_dyld_get_image_name` from gadget constructor) — current iOS path relies on rename-only
+- universal `lipo` arm64 + arm64e merging — currently two separate dylib files
+- Apple Developer codesign for non-jailbroken IPA repackaging — current ad-hoc signature is only valid on jailbroken devices
+
 ## Options
 
 ```
@@ -87,6 +118,8 @@ FRIDA_VERSION=17.7.2 CUSTOM_NAME=myserver CUSTOM_PORT=27142 EXTENDED=1 \
 
 ## Deploy
 
+### Android
+
 ```bash
 # Push to device
 adb push output/myserver-server-17.7.2-android-arm64 /data/local/tmp/myserver-server
@@ -100,6 +133,20 @@ frida -U -f com.example.app
 adb shell /data/local/tmp/myserver-server -D &
 adb forward tcp:27142 tcp:27142
 frida -H 127.0.0.1:27142 -f com.example.app
+```
+
+### iOS (Dopamine / rootless)
+
+```bash
+DEVICE=root@192.168.x.x
+
+# Server (jailbroken only) — rootless paths under /var/jb/
+scp output/myserver-server-17.7.2-ios-arm64e $DEVICE:/var/jb/usr/sbin/myserver-server
+ssh $DEVICE "chmod +x /var/jb/usr/sbin/myserver-server && /var/jb/usr/sbin/myserver-server -D &"
+frida-ps -H ${DEVICE#root@}:27042
+
+# Gadget — drop into target app's Frameworks (jailbroken Tweak) or repackaged IPA
+scp output/myserver-gadget-17.7.2-ios-arm64e.dylib $DEVICE:/var/jb/usr/lib/libmyserver-gadget.dylib
 ```
 
 Each weekly release includes a `build-info.json` with the name, port, version, and architecture.
@@ -123,17 +170,26 @@ namegen.py              Random name/port generator for stealth builds
 build-wsl.sh            WSL helper script
 test_comprehensive.js   Anti-detection + Java bridge verification script
 .github/workflows/
-  build.yml             Manual build workflow
-  scheduled-build.yml   Weekly auto-build with releases
+  build.yml             Android manual build workflow
+  build-ios.yml         iOS manual build workflow (macos-14 runner)
+  scheduled-build.yml   Weekly auto-build with releases (Android)
 ```
 
 ## Requirements
 
-- Ubuntu 22.04+ (WSL works)
+**Android**
+- Ubuntu 22.04+ (WSL works) or other Linux
+- Android NDK r29 (auto-downloaded)
+
+**iOS**
+- macOS 14+ with Xcode 15+ Command Line Tools (`xcode-select --install`)
+- Homebrew `meson` + `pkg-config`
+- iphoneos SDK (`xcrun --sdk iphoneos --show-sdk-path` must succeed)
+
+**Both**
 - Python 3.10+
 - Git, curl, unzip, make
 - ~20 GB free disk space
-- Android NDK r29 (auto-downloaded)
 
 ## Version Support
 
@@ -157,6 +213,8 @@ Verified on arm64 Android 14 device with `--extended`:
 
 - **arm32 apps** (Chrome): Frida upstream bug [#2878](https://github.com/frida/frida/issues/2878) — `invalid instruction` in `_patchCode`. Not a phantom-frida issue.
 - **D-Bus interface names** (`re.frida.HostSession17` etc.): Intentionally NOT renamed in base mode. These are the client-server protocol — renaming server-side would break standard `frida` client. Not a detection vector (only visible over USB/TCP channel).
+- **iOS reach is narrower than Android**: SELinux / memfd / libc-hook / DEX vectors are Linux-specific and don't apply. iOS gets cross-platform vectors plus `install_name_tool`, Mach-O symbol sweep, ad-hoc codesign. Active dyld image hiding is not yet implemented.
+- **iOS ad-hoc signature is jailbreak-only**: Apps repackaged for non-jailbroken devices need to re-sign with an Apple Developer cert (overwrites the ad-hoc signature, which is fine).
 
 ## Credits
 

@@ -5,18 +5,27 @@ Custom Frida Builder — build anti-detection Frida server from source.
 Extended beyond ajeossida with additional stealth techniques.
 Verified against Frida 17.7.2 source code.
 
-Usage (run in WSL Ubuntu):
+Usage (Android, run in Ubuntu/WSL):
     python3 build.py --version 17.7.2
     python3 build.py --version 17.7.2 --name stealth --port 27142
     python3 build.py --version 17.7.2 --arch android-arm64,android-arm --extended
     python3 build.py --version 17.7.2 --skip-build  # only patch, don't compile
 
+Usage (iOS, run on macOS with Xcode CLT):
+    python3 build.py --version 17.7.2 --arch ios-arm64 --extended
+    python3 build.py --version 17.7.2 --arch ios-arm64,ios-arm64e --extended
+
 Requirements:
-    - Ubuntu 22.04+ (WSL works)
-    - Python 3.10+
-    - Git
-    - ~20GB free disk space
-    - Internet connection (clones Frida + downloads NDK)
+    Android build:
+        - Ubuntu 22.04+ (WSL works) or other Linux
+        - Android NDK r29 (auto-downloaded if missing)
+    iOS build:
+        - macOS 14+ with Xcode 15+ Command Line Tools
+        - Xcode SDK iphoneos available (xcrun --sdk iphoneos --show-sdk-path)
+    Both:
+        - Python 3.10+
+        - Git, ~20 GB free disk space
+        - Internet connection (clones Frida)
 """
 
 import argparse
@@ -49,7 +58,17 @@ from patches import (
 
 NDK_VERSION = "r29"
 NDK_URL = f"https://dl.google.com/android/repository/android-ndk-{NDK_VERSION}-linux.zip"
-ALL_ARCHS = ["android-arm64", "android-arm", "android-x86_64", "android-x86"]
+ANDROID_ARCHS = ["android-arm64", "android-arm", "android-x86_64", "android-x86"]
+IOS_ARCHS = ["ios-arm64", "ios-arm64e"]
+ALL_ARCHS = ANDROID_ARCHS + IOS_ARCHS
+
+
+def is_ios_arch(arch: str) -> bool:
+    return arch.startswith("ios-")
+
+
+def is_android_arch(arch: str) -> bool:
+    return arch.startswith("android-")
 
 
 def log(msg: str, level: str = "INFO"):
@@ -394,7 +413,7 @@ def rebuild_helper_dex(frida_dir: Path, custom_name: str):
         log("  classes.dex not generated, keeping pre-compiled DEX", "WARN")
 
 
-def apply_source_patches(frida_dir: Path, custom_name: str):
+def apply_source_patches(frida_dir: Path, custom_name: str, has_android: bool = True):
     """Apply global recursive string replacements across the source tree."""
     log("=" * 60, "HEADER")
     log("PHASE 1: Global source patches", "STEP")
@@ -421,14 +440,22 @@ def apply_source_patches(frida_dir: Path, custom_name: str):
     # Rename actual files on disk to match source references
     rename_frida_files(frida_dir, custom_name)
 
-    # Rebuild helper DEX with renamed Java package
-    rebuild_helper_dex(frida_dir, custom_name)
+    # Rebuild helper DEX with renamed Java package (Android-only)
+    if has_android:
+        rebuild_helper_dex(frida_dir, custom_name)
+    else:
+        log("  Skipping DEX rebuild (no Android arch in build)", "INFO")
 
     log("Global source patches complete", "OK")
 
 
-def apply_targeted_patches(frida_dir: Path, custom_name: str, frida_major: int):
-    """Apply patches to specific files (memfd, libc hooks, SELinux, build system)."""
+def apply_targeted_patches(frida_dir: Path, custom_name: str, frida_major: int,
+                            has_android: bool = True):
+    """Apply patches to specific files (memfd, libc hooks, SELinux, build system).
+
+    The memfd / libc-hook / SELinux blocks are Linux/Android-specific and skipped
+    when only iOS targets are being built.
+    """
     log("=" * 60, "HEADER")
     log("PHASE 2: Targeted file patches", "STEP")
     log("=" * 60, "HEADER")
@@ -437,39 +464,42 @@ def apply_targeted_patches(frida_dir: Path, custom_name: str, frida_major: int):
     core_dir = frida_dir / "subprojects" / "frida-core"
     gum_dir = frida_dir / "subprojects" / "frida-gum"
 
-    # --- memfd_create: hide agent name in /proc/pid/fd ---
-    memfd_cfg = MEMFD_PATCHES.get(frida_major, MEMFD_PATCHES[17])
-    memfd_file = core_dir / memfd_cfg["file"]
-    if memfd_file.exists():
-        count = replace_in_file(memfd_file, memfd_cfg["old"], memfd_cfg["new"])
-        if count:
-            log(f"  memfd_create -> 'jit-cache' in {memfd_cfg['file']}", "OK")
+    if has_android:
+        # --- memfd_create: hide agent name in /proc/pid/fd ---
+        memfd_cfg = MEMFD_PATCHES.get(frida_major, MEMFD_PATCHES[17])
+        memfd_file = core_dir / memfd_cfg["file"]
+        if memfd_file.exists():
+            count = replace_in_file(memfd_file, memfd_cfg["old"], memfd_cfg["new"])
+            if count:
+                log(f"  memfd_create -> 'jit-cache' in {memfd_cfg['file']}", "OK")
+            else:
+                log(f"  memfd_create: pattern not found in {memfd_cfg['file']}", "WARN")
         else:
-            log(f"  memfd_create: pattern not found in {memfd_cfg['file']}", "WARN")
+            log(f"  memfd file missing: {memfd_cfg['file']}", "WARN")
+
+        # --- Disable exit monitor (prevents detection via hooked exit/_exit/abort) ---
+        exit_monitor = core_dir / "lib" / "payload" / "exit-monitor.vala"
+        if exit_monitor.exists():
+            for old, new in LIBC_HOOK_PATCHES["exit_monitor"]:
+                count = replace_in_file(exit_monitor, old, new)
+                if count:
+                    log(f"  exit-monitor: disabled interceptor.attach ({count})", "OK")
+
+        # --- Disable signal/sigaction hooking ---
+        exceptor = gum_dir / "gum" / "backend-posix" / "gumexceptor-posix.c"
+        if exceptor.exists():
+            for old, new in LIBC_HOOK_PATCHES["exceptor"]:
+                count = replace_in_file(exceptor, old, new)
+                if count:
+                    log(f"  gumexceptor: disabled hook ({count})", "OK")
+
+        # --- SELinux labels (in linjector.vala for 17.x) ---
+        for old, new in SELINUX_PATCHES(custom_name):
+            count = replace_in_tree(frida_dir, old, new)
+            if count:
+                log(f"  SELinux: {old} -> {new} ({count})", "OK")
     else:
-        log(f"  memfd file missing: {memfd_cfg['file']}", "WARN")
-
-    # --- Disable exit monitor (prevents detection via hooked exit/_exit/abort) ---
-    exit_monitor = core_dir / "lib" / "payload" / "exit-monitor.vala"
-    if exit_monitor.exists():
-        for old, new in LIBC_HOOK_PATCHES["exit_monitor"]:
-            count = replace_in_file(exit_monitor, old, new)
-            if count:
-                log(f"  exit-monitor: disabled interceptor.attach ({count})", "OK")
-
-    # --- Disable signal/sigaction hooking ---
-    exceptor = gum_dir / "gum" / "backend-posix" / "gumexceptor-posix.c"
-    if exceptor.exists():
-        for old, new in LIBC_HOOK_PATCHES["exceptor"]:
-            count = replace_in_file(exceptor, old, new)
-            if count:
-                log(f"  gumexceptor: disabled hook ({count})", "OK")
-
-    # --- SELinux labels (in linjector.vala for 17.x) ---
-    for old, new in SELINUX_PATCHES(custom_name):
-        count = replace_in_tree(frida_dir, old, new)
-        if count:
-            log(f"  SELinux: {old} -> {new} ({count})", "OK")
+        log("  Skipping memfd/libc/SELinux patches (no Android arch in build)", "INFO")
 
     # --- Build system files ---
     targets = {
@@ -681,22 +711,32 @@ def apply_binary_patches(binary_path: Path, custom_name: str, extended: bool = F
 # Build
 # ============================================================================
 
-def configure_arch(frida_dir: Path, arch: str, ndk_path: Path):
+def configure_arch(frida_dir: Path, arch: str, ndk_path: Path | None):
     log(f"Configuring for {arch}...", "STEP")
+    env: dict[str, str] = {}
+    if is_android_arch(arch):
+        if ndk_path is None:
+            log(f"NDK required for {arch} but ndk_path is None", "ERROR")
+            sys.exit(1)
+        env["ANDROID_NDK_ROOT"] = str(ndk_path)
+    # iOS: rely on Xcode CLT picked up automatically by Frida's meson cross-files.
     run(
         f"./configure --host={arch}",
         cwd=str(frida_dir),
-        env={"ANDROID_NDK_ROOT": str(ndk_path)},
+        env=env,
     )
 
 
-def build_frida(frida_dir: Path, ndk_path: Path):
+def build_frida(frida_dir: Path, arch: str, ndk_path: Path | None):
     cpus = os.cpu_count() or 4
-    log(f"Building ({cpus} threads)...", "STEP")
+    log(f"Building {arch} ({cpus} threads)...", "STEP")
+    env: dict[str, str] = {}
+    if is_android_arch(arch) and ndk_path is not None:
+        env["ANDROID_NDK_ROOT"] = str(ndk_path)
     run(
         f"make -j{cpus}",
         cwd=str(frida_dir),
-        env={"ANDROID_NDK_ROOT": str(ndk_path)},
+        env=env,
     )
 
 
@@ -704,12 +744,87 @@ def build_frida(frida_dir: Path, ndk_path: Path):
 # Collect artifacts
 # ============================================================================
 
+def fix_macho_install_name(dylib: Path, custom_name: str):
+    """Rewrite LC_ID_DYLIB so dyld image enumeration sees @rpath/lib{name}-gadget.dylib
+    instead of any 'frida' / 'Frida' substring. install_name_tool invalidates
+    the existing signature, so caller must re-codesign afterwards.
+    """
+    new_id = f"@rpath/lib{custom_name}-gadget.dylib"
+    log(f"    install_name_tool -id {new_id}", "STEP")
+    run(f"install_name_tool -id {new_id} {dylib}", check=False)
+
+
+def sweep_macho_symbols(binary: Path, custom_name: str):
+    """Byte-replace residual _frida_* / _FRIDA_* / _Frida* symbols in the Mach-O
+    string table. Length-preserving — skips any symbol where the rename would
+    change the byte length. Must run AFTER apply_binary_patches (thread names)
+    and BEFORE codesign (which seals the final bytes).
+    """
+    result = subprocess.run(
+        f"nm -gU {binary} 2>/dev/null | awk '{{print $NF}}' "
+        f"| grep -E '^_(frida|FRIDA|Frida)' | sort -u",
+        shell=True, capture_output=True, text=True
+    )
+    syms = [s.strip() for s in result.stdout.splitlines() if s.strip()]
+    if not syms:
+        log("    Mach-O symbol sweep: no residual frida/Frida/FRIDA symbols", "OK")
+        return
+
+    cap = custom_name[0].upper() + custom_name[1:]
+    data = binary.read_bytes()
+    original_size = len(data)
+    replaced = 0
+    skipped: list[str] = []
+
+    for sym in syms:
+        bare = sym[1:] if sym.startswith("_") else sym
+        if bare.startswith("frida"):
+            new_bare = custom_name + bare[5:]
+        elif bare.startswith("FRIDA"):
+            new_bare = custom_name.upper() + bare[5:]
+        elif bare.startswith("Frida"):
+            new_bare = cap + bare[5:]
+        else:
+            continue
+        if len(new_bare) != len(bare):
+            skipped.append(f"{bare}->{new_bare}")
+            continue
+        old_b = bare.encode()
+        new_b = new_bare.encode()
+        if old_b in data:
+            count = data.count(old_b)
+            data = data.replace(old_b, new_b)
+            replaced += count
+
+    if skipped:
+        log(f"    Mach-O symbol sweep: skipped {len(skipped)} length-mismatch (e.g. {skipped[0]})", "WARN")
+    if replaced:
+        assert len(data) == original_size, "symbol sweep changed binary size"
+        binary.write_bytes(data)
+        log(f"    Mach-O symbol sweep: {replaced} byte replacements across {len(syms)} symbol names", "OK")
+
+
+def codesign_adhoc(path: Path):
+    """Re-apply ad-hoc signature. Must be the last step in the iOS post-process
+    chain — install_name_tool / byte patches / symbol sweep all invalidate it.
+    """
+    log(f"    codesign --force --sign - {path.name}", "STEP")
+    run(f"codesign --force --sign - {path}", check=False)
+
+
 def collect_artifacts(frida_dir: Path, arch: str, custom_name: str,
                       version: str, output_dir: Path, extended: bool):
     """Find, binary-patch, and package build artifacts."""
     log(f"Collecting artifacts for {arch}...", "STEP")
 
-    arch_short = arch.replace("android-", "")
+    if is_ios_arch(arch):
+        os_tag = "ios"
+        arch_short = arch.replace("ios-", "")
+        lib_ext = "dylib"
+    else:
+        os_tag = "android"
+        arch_short = arch.replace("android-", "")
+        lib_ext = "so"
 
     def find_artifact(subdir: str, patterns: list[str]) -> Path | None:
         base = frida_dir / "build" / "subprojects" / "frida-core" / subdir
@@ -738,6 +853,19 @@ def collect_artifacts(frida_dir: Path, arch: str, custom_name: str,
         shutil.copy2(src, out_bin)
         os.chmod(out_bin, 0o755)
 
+    def post_process(binary: Path, *, is_dylib: bool):
+        """iOS: install_name_tool -> byte patches -> symbol sweep -> codesign.
+        Android: byte patches only. Order matters — codesign must be last.
+        """
+        if is_ios_arch(arch):
+            if is_dylib:
+                fix_macho_install_name(binary, custom_name)
+            apply_binary_patches(binary, custom_name, extended)
+            sweep_macho_symbols(binary, custom_name)
+            codesign_adhoc(binary)
+        else:
+            apply_binary_patches(binary, custom_name, extended)
+
     # --- Server ---
     server = find_artifact("server", [
         f"{custom_name}-server",
@@ -747,34 +875,34 @@ def collect_artifacts(frida_dir: Path, arch: str, custom_name: str,
     ])
     if server:
         log(f"  Server: {server.name}", "OK")
-        apply_binary_patches(server, custom_name, extended)
-        save_artifact(server, f"{custom_name}-server-{version}-android-{arch_short}")
+        post_process(server, is_dylib=False)
+        save_artifact(server, f"{custom_name}-server-{version}-{os_tag}-{arch_short}")
     else:
         log("  Server: NOT FOUND", "ERROR")
 
-    # --- Agent .so ---
+    # --- Agent ---
     agent = find_artifact("lib/agent", [
-        f"lib{custom_name}-agent.so",
-        f"lib{custom_name}-agent-modulated.so",
-        f"lib{custom_name}-agent-raw.so",
-        "libfrida-agent.so",
-        "libfrida-agent-modulated.so",
+        f"lib{custom_name}-agent.{lib_ext}",
+        f"lib{custom_name}-agent-modulated.{lib_ext}",
+        f"lib{custom_name}-agent-raw.{lib_ext}",
+        f"libfrida-agent.{lib_ext}",
+        f"libfrida-agent-modulated.{lib_ext}",
     ])
     if agent:
         log(f"  Agent: {agent.name}", "OK")
-        apply_binary_patches(agent, custom_name, extended)
+        post_process(agent, is_dylib=(lib_ext == "dylib"))
 
-    # --- Gadget .so ---
+    # --- Gadget ---
     gadget = find_artifact("lib/gadget", [
-        f"lib{custom_name}-gadget.so",
-        f"lib{custom_name}-gadget-modulated.so",
-        "libfrida-gadget.so",
-        "libfrida-gadget-modulated.so",
+        f"lib{custom_name}-gadget.{lib_ext}",
+        f"lib{custom_name}-gadget-modulated.{lib_ext}",
+        f"libfrida-gadget.{lib_ext}",
+        f"libfrida-gadget-modulated.{lib_ext}",
     ])
     if gadget:
         log(f"  Gadget: {gadget.name}", "OK")
-        apply_binary_patches(gadget, custom_name, extended)
-        save_artifact(gadget, f"{custom_name}-gadget-{version}-android-{arch_short}.so")
+        post_process(gadget, is_dylib=(lib_ext == "dylib"))
+        save_artifact(gadget, f"{custom_name}-gadget-{version}-{os_tag}-{arch_short}.{lib_ext}")
 
 
 # ============================================================================
@@ -826,6 +954,7 @@ Examples:
   python3 build.py --version 17.7.2
   python3 build.py --version 17.7.2 --name stealth --port 27142
   python3 build.py --version 17.7.2 --arch android-arm64,android-arm --extended
+  python3 build.py --version 17.7.2 --arch ios-arm64,ios-arm64e --extended  (macOS only)
   python3 build.py --version 17.7.2 --skip-build  # patch only, no compilation
   python3 build.py --version 17.7.2 --temp-fixes   # add stability patches
 
@@ -875,6 +1004,14 @@ Detection vectors covered:
         log("Custom name must be at least 3 characters", "ERROR")
         sys.exit(1)
 
+    has_android = any(is_android_arch(a) for a in archs)
+    has_ios = any(is_ios_arch(a) for a in archs)
+
+    # iOS build needs macOS + Xcode CLT
+    if has_ios and sys.platform != "darwin":
+        log("iOS targets require running on macOS (Xcode CLT for iphoneos SDK)", "ERROR")
+        sys.exit(1)
+
     # Directories
     script_dir = Path(__file__).parent.resolve()
     work_dir = Path(args.work_dir) if args.work_dir else script_dir / "build"
@@ -894,15 +1031,19 @@ Detection vectors covered:
     log(f"  Work dir: {work_dir}", "INFO")
     log(f"  Output:   {output_dir}", "INFO")
 
-    # Step 1: NDK
-    if args.ndk_path:
-        ndk_path = Path(args.ndk_path).resolve()
-        if not ndk_path.exists():
-            log(f"NDK path does not exist: {ndk_path}", "ERROR")
-            sys.exit(1)
+    # Step 1: NDK (Android only)
+    ndk_path: Path | None = None
+    if has_android:
+        if args.ndk_path:
+            ndk_path = Path(args.ndk_path).resolve()
+            if not ndk_path.exists():
+                log(f"NDK path does not exist: {ndk_path}", "ERROR")
+                sys.exit(1)
+        else:
+            ndk_path = ensure_ndk(work_dir)
+        log(f"  NDK:      {ndk_path}", "INFO")
     else:
-        ndk_path = ensure_ndk(work_dir)
-    log(f"  NDK:      {ndk_path}", "INFO")
+        log("  NDK:      not needed (iOS-only build)", "INFO")
 
     # Step 2: Clone
     frida_dir = work_dir / "frida"
@@ -918,8 +1059,8 @@ Detection vectors covered:
         log(f"Using existing source at {frida_dir}", "OK")
 
     # Step 3: Source patches
-    apply_source_patches(frida_dir, custom_name)
-    apply_targeted_patches(frida_dir, custom_name, frida_major)
+    apply_source_patches(frida_dir, custom_name, has_android=has_android)
+    apply_targeted_patches(frida_dir, custom_name, frida_major, has_android=has_android)
 
     # Step 3.5: Extended patches
     if args.extended:
@@ -938,8 +1079,12 @@ Detection vectors covered:
         log(f"Source ready at: {frida_dir}", "INFO")
         log("To build manually:", "INFO")
         log(f"  cd {frida_dir}", "INFO")
-        log(f"  ANDROID_NDK_ROOT={ndk_path} ./configure --host=android-arm64", "INFO")
-        log(f"  ANDROID_NDK_ROOT={ndk_path} make -j$(nproc)", "INFO")
+        if has_android:
+            log(f"  ANDROID_NDK_ROOT={ndk_path} ./configure --host=android-arm64", "INFO")
+            log(f"  ANDROID_NDK_ROOT={ndk_path} make -j$(nproc)", "INFO")
+        if has_ios:
+            log("  ./configure --host=ios-arm64", "INFO")
+            log("  make -j$(sysctl -n hw.ncpu)", "INFO")
         return
 
     # Step 5: Build loop
@@ -953,14 +1098,14 @@ Detection vectors covered:
 
         # First build
         log("First build...", "STEP")
-        build_frida(frida_dir, ndk_path)
+        build_frida(frida_dir, arch, ndk_path)
 
         # Post-build patches (frida_agent_main appears only after first build)
         apply_post_build_patches(frida_dir, custom_name)
 
         # Second build (incremental — only recompiles files with patched symbol)
         log("Second build (incremental)...", "STEP")
-        build_frida(frida_dir, ndk_path)
+        build_frida(frida_dir, arch, ndk_path)
 
         # Collect and binary-patch artifacts
         collect_artifacts(frida_dir, arch, custom_name, version, output_dir, args.extended)
@@ -984,13 +1129,25 @@ Detection vectors covered:
     # Usage hint
     log("", "INFO")
     log("To deploy:", "STEP")
-    arch_short = archs[0].replace("android-", "")
-    server_name = f"{custom_name}-server-{version}-android-{arch_short}"
-    log(f"  adb push output/{server_name} /data/local/tmp/{custom_name}-server", "INFO")
-    log(f"  adb shell chmod 755 /data/local/tmp/{custom_name}-server", "INFO")
-    log(f"  adb shell /data/local/tmp/{custom_name}-server &", "INFO")
+    first_arch = archs[0]
+    if is_ios_arch(first_arch):
+        arch_short = first_arch.replace("ios-", "")
+        server_name = f"{custom_name}-server-{version}-ios-{arch_short}"
+        gadget_name = f"{custom_name}-gadget-{version}-ios-{arch_short}.dylib"
+        log(f"  scp output/{server_name} root@<device>:/var/jb/usr/sbin/{custom_name}-server", "INFO")
+        log(f"  scp output/{gadget_name} root@<device>:/var/jb/usr/lib/lib{custom_name}-gadget.dylib", "INFO")
+        log(f"  ssh root@<device> 'chmod +x /var/jb/usr/sbin/{custom_name}-server && /var/jb/usr/sbin/{custom_name}-server &'", "INFO")
+    else:
+        arch_short = first_arch.replace("android-", "")
+        server_name = f"{custom_name}-server-{version}-android-{arch_short}"
+        log(f"  adb push output/{server_name} /data/local/tmp/{custom_name}-server", "INFO")
+        log(f"  adb shell chmod 755 /data/local/tmp/{custom_name}-server", "INFO")
+        log(f"  adb shell /data/local/tmp/{custom_name}-server &", "INFO")
+
     if args.port:
         log(f"  frida -H 127.0.0.1:{args.port} -f <package>", "INFO")
+    elif is_ios_arch(first_arch):
+        log("  frida -H <device-ip>:27042 -f <bundle-id>", "INFO")
     else:
         log(f"  frida -U -f <package>", "INFO")
 
