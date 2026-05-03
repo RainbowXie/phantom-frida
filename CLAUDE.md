@@ -52,7 +52,7 @@
 | `build-wsl.sh` | WSL Ubuntu 本地构建辅助脚本（仅 Android） |
 | `.github/workflows/build.yml` | Android 手动构建 workflow |
 | `.github/workflows/scheduled-build.yml` | Android 周度自动构建 + release |
-| `.github/workflows/build-ios.yml` | **iOS 构建 workflow（待新增）** |
+| `.github/workflows/build-ios.yml` | iOS 构建 workflow（macos-14 runner） |
 | `test_comprehensive.js` | 反检测 + Java bridge 验证脚本（Android） |
 
 ## 默认参数
@@ -66,7 +66,6 @@
 
 - iOS 反检测覆盖少于 Android（Linux 专属向量不适用）
 - iOS dylib `install_name` 默认走 `@rpath`，重打包非越狱 IPA 时需用户自行 `install_name_tool` 调整
-- 不输出 universal binary（arm64 + arm64e 分文件，按设备选）
 - Frida 16.x → 17.x 差异由 `detect_frida_major` 自动分支，但只测过 17.x
 
 ## 任务执行守则

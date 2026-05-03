@@ -96,13 +96,12 @@ The 16 Android vectors above use `gum-linux` / `linjector` / SELinux / DEX paths
 | i6 | Code signature mismatch | `codesign -dv` | Re-signed ad-hoc with `--identifier lib<name>-gadget` |
 | i7 | Vala-emitted GType names `FridaXxx` (e.g. `FridaAgentSession`, `FridaGadgetController`) | `objc_getClass` / `g_type_from_name` / `strings` scan | 26-pattern PascalCase byte sweep (`Frida[A-Z]` → `<Cap><name[1:5]>[A-Z]`), length-preserving |
 
-The lowercase `Frida\0` JS-runtime API global is intentionally preserved — replacing it crashes the embedded JS engine ([upstream issue #1](https://github.com/TheQmaks/phantom-frida/issues/1)).
+The standalone `Frida\0` JS-runtime API global (capital `F`, null-terminated, with no following PascalCase letter) is intentionally preserved — replacing it crashes the embedded JS engine ([upstream issue #1](https://github.com/TheQmaks/phantom-frida/issues/1)).
 
 Not yet covered (planned):
 
 - JS runtime asset paths `/frida/runtime/*.js` (~91 occurrences). These are paths into the embedded JS asset bundle; renaming requires rebuilding the gum-js-runtime bundle.
 - Active dyld image hiding (intercept `_dyld_image_count` / `_dyld_get_image_name` from gadget constructor) — current iOS path relies on rename-only
-- universal `lipo` arm64 + arm64e merging — currently two separate dylib files
 - Apple Developer codesign for non-jailbroken IPA repackaging — current ad-hoc signature is only valid on jailbroken devices
 
 ## Options
