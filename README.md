@@ -14,22 +14,26 @@ Standard Frida client (`pip install frida-tools`) connects to the patched server
 
 ### GitHub Actions (recommended)
 
-**Android** — Actions > **Build Custom Frida** > Run workflow (runs on `ubuntu-22.04` with NDK r29).
+**Android** — Actions > **Build Custom Frida** > Run workflow (runs on `ubuntu-22.04`, NDK auto-selected: r25c for Frida 17.7.x, r29 for 17.9.x and later).
 
-**iOS** — Actions > **Build iOS dylib** > Run workflow (runs on `macos-14` with Xcode CLT). Defaults to `ios-arm64,ios-arm64e`.
+**iOS** — Actions > **Build iOS dylib** > Run workflow (runs on `macos-14` with Xcode CLT). Defaults to `ios-arm64,ios-arm64e`; ad-hoc codesign via `IOS_CERTID=-`.
 
 Both fork-then-trigger. Artifacts ready in ~8 min with cache, ~35 min cold.
+
+### Pre-built releases
+
+Pre-signed binaries are published on the fork's [Releases page](https://github.com/RainbowXie/phantom-frida/releases) — pick the tag matching your Frida version and platform, verify with the bundled `SHA256SUMS.txt`.
 
 ### Local build (WSL Ubuntu)
 
 ```bash
-python3 build.py --version 17.7.2
+python3 build.py --version 17.9.1
 
 # Full options:
-python3 build.py --version 17.7.2 --name myserver --port 27142 --extended --verify
+python3 build.py --version 17.9.1 --name myserver --port 27142 --extended --verify
 
 # Patch only (inspect changes without compiling):
-python3 build.py --version 17.7.2 --skip-build
+python3 build.py --version 17.9.1 --skip-build
 ```
 
 ### WSL helper script
@@ -38,7 +42,7 @@ python3 build.py --version 17.7.2 --skip-build
 wsl -d Ubuntu bash build-wsl.sh
 
 # With options:
-FRIDA_VERSION=17.7.2 CUSTOM_NAME=myserver CUSTOM_PORT=27142 EXTENDED=1 \
+FRIDA_VERSION=17.9.1 CUSTOM_NAME=myserver CUSTOM_PORT=27142 EXTENDED=1 \
   wsl -d Ubuntu bash build-wsl.sh
 ```
 
@@ -48,10 +52,10 @@ iOS targets need Xcode CLT (`xcode-select --install`) and Homebrew `meson` + `pk
 
 ```bash
 brew install meson pkg-config
-python3 build.py --version 17.7.2 --arch ios-arm64,ios-arm64e --extended
+python3 build.py --version 17.9.1 --arch ios-arm64,ios-arm64e --extended
 ```
 
-Output: `output/<name>-gadget-17.7.2-ios-{arm64,arm64e}.dylib` and `output/<name>-server-17.7.2-ios-{arm64,arm64e}` — both ad-hoc signed, ready for Dopamine / iOS 16 rootless.
+Output: `output/<name>-gadget-17.9.1-ios-{arm64,arm64e}.dylib` and `output/<name>-server-17.9.1-ios-{arm64,arm64e}` — both ad-hoc signed, ready for Dopamine / iOS 16 rootless.
 
 ## Detection Vectors
 
@@ -109,7 +113,7 @@ Not yet covered (the floor for rename-only stealth — going lower breaks compat
 --verify         Scan output for residual 'frida' strings
 --skip-build     Apply patches only, don't compile
 --skip-clone     Use existing source in work-dir
---ndk-path       Path to existing Android NDK r29
+--ndk-path       Path to existing Android NDK (r25c for Frida 17.7.x, r29 for 17.9.x+)
 ```
 
 ## Deploy
@@ -118,7 +122,7 @@ Not yet covered (the floor for rename-only stealth — going lower breaks compat
 
 ```bash
 # Push to device
-adb push output/myserver-server-17.7.2-android-arm64 /data/local/tmp/myserver-server
+adb push output/myserver-server-17.9.1-android-arm64 /data/local/tmp/myserver-server
 adb shell chmod 755 /data/local/tmp/myserver-server
 
 # Start (default port 27042)
@@ -139,12 +143,12 @@ When both `ios-arm64,ios-arm64e` are built, an additional `ios-universal` fat bi
 DEVICE=root@192.168.x.x
 
 # Server (jailbroken only) — rootless paths under /var/jb/
-scp output/myserver-server-17.7.2-ios-universal $DEVICE:/var/jb/usr/sbin/myserver-server
+scp output/myserver-server-17.9.1-ios-universal $DEVICE:/var/jb/usr/sbin/myserver-server
 ssh $DEVICE "chmod +x /var/jb/usr/sbin/myserver-server && /var/jb/usr/sbin/myserver-server -l 0.0.0.0:27145 &"
 frida-ps -H ${DEVICE#root@}:27145
 
 # Gadget — drop into target app via DYLD_INSERT_LIBRARIES, MobileSubstrate, or repackaged IPA
-scp output/myserver-gadget-17.7.2-ios-universal.dylib $DEVICE:/var/jb/usr/lib/libmyserver-gadget.dylib
+scp output/myserver-gadget-17.9.1-ios-universal.dylib $DEVICE:/var/jb/usr/lib/libmyserver-gadget.dylib
 # Config file path: <basename>.config (no .dylib suffix)
 ssh $DEVICE "cat > /var/jb/usr/lib/libmyserver-gadget.config <<'EOF'
 { \"interaction\": { \"type\": \"listen\", \"address\": \"0.0.0.0\", \"port\": 27146, \"on_load\": \"resume\" } }
@@ -180,7 +184,7 @@ test_comprehensive.js   Anti-detection + Java bridge verification script
 
 **Android**
 - Ubuntu 22.04+ (WSL works) or other Linux
-- Android NDK r29 (auto-downloaded)
+- Android NDK auto-downloaded — r25c for Frida 17.7.x, r29 for 17.9.x and later (the workflow's `Resolve NDK version` step picks based on `frida_version`)
 
 **iOS**
 - macOS 14+ with Xcode 15+ Command Line Tools (`xcode-select --install`)
