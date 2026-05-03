@@ -30,7 +30,7 @@ def get_source_patches(name: str, cap_name: str) -> list[tuple[str, str]]:
     Global string replacements applied recursively across the Frida source tree.
     Order matters — more specific patterns before general ones to avoid double-patching.
     """
-    return [
+    patches: list[tuple[str, str]] = [
         # --- Agent library name (visible in /proc/pid/maps) ---
         ("libfrida-agent-raw.so", f"lib{name}-agent-raw.so"),
         ("libfrida-agent-modulated", f"lib{name}-agent-modulated"),
@@ -83,6 +83,11 @@ def get_source_patches(name: str, cap_name: str) -> list[tuple[str, str]]:
         ("frida-gadget.so", f"{name}-gadget.so"),
         ("frida-gadget.dll", f"{name}-gadget.dll"),
 
+        # --- Bare gadget literal (gadget-glue.c thread name, etc.) ---
+        # Distinct from the dot-suffix variants above; exact `"frida-gadget"`
+        # appears in g_thread_new ("frida-gadget", ...) and a few similar spots.
+        ('"frida-gadget"', f'"{name}-gadget"'),
+
         # --- JS engine thread name (visible in /proc/pid/task/tid/status) ---
         ('"gum-js-loop"', f'"{name}-js-loop"'),
 
@@ -91,7 +96,37 @@ def get_source_patches(name: str, cap_name: str) -> list[tuple[str, str]]:
 
         # --- [E] Extended: asset directory name ---
         ("/ 'frida'", f"/ '{name}'"),  # root_asset_dir = libdir / 'frida'
+
+        # --- Misc Frida-prefixed string literals visible in `strings` output ---
+        # GLib error quark name (xpc.vala:246 Quark.from_string("frida-error-quark")).
+        ('"frida-error-quark"', f'"{name}-error-quark"'),
+        # Error message in lib/payload/portal-client.vala — the "frida-gadget"
+        # token here is *inside* a longer string and is not caught by the bare
+        # `"frida-gadget"` double-quoted pattern above.
+        ("Emulated realm is not supported by frida-gadget",
+         f"Emulated realm is not supported by {name}-gadget"),
     ]
+
+    # gum-js-runtime asset paths and gumcmodule TCC virtual include paths use a
+    # 7-byte `/frida/` prefix that is hard-coded together with `name += 7;` in
+    # gumcmodule.c:678. Length-preserve to keep that strip valid:
+    # use the first 5 chars of `name` so `/<short5>/` stays 7 bytes.
+    #
+    # Targeted patterns (anchored on surrounding context) are mandatory — a bare
+    # `"/frida/"` global replace would corrupt D-Bus object paths like
+    # `/re/frida/HostSession` that we keep on purpose for client-server protocol
+    # compatibility.
+    if len(name) >= 5:
+        short5 = name[:5]
+        patches.extend([
+            ('"/frida/runtime/"', f'"/{short5}/runtime/"'),
+            ('"/frida/capstone "', f'"/{short5}/capstone "'),
+            ('"-isystem /frida "', f'"-isystem /{short5} "'),
+            ('g_str_has_prefix (name, "/frida/")',
+             f'g_str_has_prefix (name, "/{short5}/")'),
+        ])
+
+    return patches
 
 
 def get_rollback_patches(name: str) -> list[tuple[str, str]]:
