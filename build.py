@@ -138,9 +138,17 @@ def replace_in_tree(root: Path, old: str, new: str,
             fpath = Path(dirpath) / fname
             if fpath.is_symlink():
                 continue
-            # Skip binary files by extension
+            # Skip binary files by extension. .dat covers meson pickles
+            # (build.dat, coredata.dat, install.dat) — when replacing a string
+            # with a different-length one, text-mode rewrite corrupts the
+            # length-prefixed pickle structure. iOS post-build hits this on
+            # frida_agent_main -> {name}_agent_main (length delta varies).
+            # .pkl/.pickle defensive coverage; .ninja_deps/.ninja_log binary too.
             if fpath.suffix in {".o", ".a", ".so", ".gz", ".zip", ".png", ".jpg", ".pyc",
-                                ".dex", ".jar", ".class", ".elf", ".wasm", ".dylib", ".dll"}:
+                                ".dex", ".jar", ".class", ".elf", ".wasm", ".dylib", ".dll",
+                                ".dat", ".pkl", ".pickle"}:
+                continue
+            if fname in {".ninja_deps", ".ninja_log"}:
                 continue
             total += replace_in_file(fpath, old, new)
 
