@@ -1101,6 +1101,16 @@ Detection vectors covered:
         log(f"Building for {arch}", "STEP")
         log("=" * 60, "HEADER")
 
+        # Frida's ./configure refuses to re-run when build/ already exists
+        # ("Already configured. Wipe ./build to reconfigure."), so multi-arch
+        # builds must clear the per-arch build dir before each configure.
+        # Artifacts for the previous arch were already saved to output/ by
+        # collect_artifacts, so wiping here is safe.
+        build_dir = frida_dir / "build"
+        if build_dir.exists():
+            log(f"Removing stale {build_dir} before reconfigure", "INFO")
+            shutil.rmtree(build_dir, ignore_errors=True)
+
         # Configure
         configure_arch(frida_dir, arch, ndk_path)
 
