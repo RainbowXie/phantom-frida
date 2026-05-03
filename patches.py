@@ -119,11 +119,19 @@ def get_source_patches(name: str, cap_name: str) -> list[tuple[str, str]]:
     if len(name) >= 5:
         short5 = name[:5]
         patches.extend([
+            # Order matters: do `"/frida/runtime/"` (with surrounding slashes)
+            # first so the bare-quoted `"frida/runtime"` pattern below cannot
+            # carve into the slash-bounded form.
             ('"/frida/runtime/"', f'"/{short5}/runtime/"'),
             ('"/frida/capstone "', f'"/{short5}/capstone "'),
             ('"-isystem /frida "', f'"-isystem /{short5} "'),
             ('g_str_has_prefix (name, "/frida/")',
              f'g_str_has_prefix (name, "/{short5}/")'),
+            # gumquickcompile.c:173 — `parts[0] = g_strdup ("frida/runtime");`
+            # builds the QuickJS module filename baked into compiled bytecode.
+            # Without this rename, every `/frida/runtime/<file>.js` string
+            # ends up embedded in the .qjs blob (visible to `strings`).
+            ('"frida/runtime"', f'"{short5}/runtime"'),
         ])
 
     return patches
