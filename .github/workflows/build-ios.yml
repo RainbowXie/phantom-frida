@@ -111,6 +111,10 @@ jobs:
           echo "Will run: $CMD"
 
       - name: Apply patches and build
+        env:
+          # Frida's post-process.py requires this for iOS helper signing.
+          # "-" = ad-hoc signature, valid only on jailbroken devices.
+          IOS_CERTID: '-'
         run: ${{ steps.cmd.outputs.cmd }}
 
       - name: List artifacts
