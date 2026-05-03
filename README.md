@@ -20,14 +20,6 @@ Standard Frida client (`pip install frida-tools`) connects to the patched server
 
 Both fork-then-trigger. Artifacts ready in ~8 min with cache, ~35 min cold.
 
-### Weekly auto-builds
-
-The **Weekly Stealth Build** workflow runs every Sunday:
-- Detects latest Frida version automatically
-- Generates a random name and port via `namegen.py`
-- Builds with `--extended` for maximum stealth
-- Creates a GitHub Release with binary + `build-info.json`
-
 ### Local build (WSL Ubuntu)
 
 ```bash
@@ -160,8 +152,6 @@ ssh $DEVICE "DYLD_INSERT_LIBRARIES=/var/jb/usr/lib/libmyserver-gadget.dylib /var
 frida-ps -H ${DEVICE#root@}:27146   # → "Gadget"
 ```
 
-Each weekly release includes a `build-info.json` with the name, port, version, and architecture.
-
 ## Build Phases
 
 1. **Source patches**: Global string replacement across the entire Frida source tree. Renames all `frida-agent`, `frida-helper`, `frida-server`, `re.frida.*` references. Rebuilds Android helper DEX with renamed Java package.
@@ -183,7 +173,6 @@ test_comprehensive.js   Anti-detection + Java bridge verification script
 .github/workflows/
   build.yml             Android manual build workflow
   build-ios.yml         iOS manual build workflow (macos-14 runner)
-  scheduled-build.yml   Weekly auto-build with releases (Android)
 ```
 
 ## Requirements

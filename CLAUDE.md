@@ -51,7 +51,6 @@
 | `namegen.py` | 随机自定义名/端口生成器 |
 | `build-wsl.sh` | WSL Ubuntu 本地构建辅助脚本（仅 Android） |
 | `.github/workflows/build.yml` | Android 手动构建 workflow |
-| `.github/workflows/scheduled-build.yml` | Android 周度自动构建 + release |
 | `.github/workflows/build-ios.yml` | iOS 构建 workflow（macos-14 runner） |
 | `test_comprehensive.js` | 反检测 + Java bridge 验证脚本（Android） |
 
