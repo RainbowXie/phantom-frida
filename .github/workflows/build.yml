@@ -45,6 +45,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Patch invariant tests
+        run: python3 -m unittest discover -s tests -v
+
       - name: System info
         run: |
           echo "CPUs: $(nproc)"

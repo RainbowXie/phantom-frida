@@ -44,6 +44,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Patch invariant tests
+        run: python3 -m unittest discover -s tests -v
+
       - name: System info
         run: |
           sw_vers
@@ -166,6 +169,44 @@ jobs:
             count_sym=$(nm -gU "$f" 2>/dev/null | grep -c -E '_(frida|Frida|FRIDA)' || true)
             echo "$(basename "$f"): strings frida=$count_frida Frida*=$count_Frida nm-symbols=$count_sym"
           done
+
+      - name: Residual regression gate
+        # Hard gate so a future patches.py change that re-leaks `frida` symbols
+        # or PascalCase Frida* GType names (or pushes lowercase residuals back
+        # over the floor we documented) fails the workflow instead of silently
+        # shipping. The lowercase threshold is 80; today's floor on
+        # gadget+server (universal + per-arch) is 75.
+        run: |
+          THRESHOLD_LOWERCASE=80
+          fail=0
+          for f in output/*.dylib output/*-server-ios-*; do
+            [ -f "$f" ] || continue
+            case "$f" in *.gz) continue ;; esac
+            cf=$(strings "$f" | grep -c -E '\bfrida\b' || true)
+            cF=$(strings "$f" | grep -c -E '\bFrida[A-Z]' || true)
+            cs=$(nm -gU "$f" 2>/dev/null | grep -c -E '_(frida|Frida|FRIDA)' || true)
+            base=$(basename "$f")
+            if [ "$cF" -ne 0 ]; then
+              echo "FAIL $base: strings Frida[A-Z]=$cF (must be 0)"
+              fail=1
+            fi
+            if [ "$cs" -ne 0 ]; then
+              echo "FAIL $base: nm -gU _frida*=$cs (must be 0)"
+              fail=1
+            fi
+            if [ "$cf" -gt "$THRESHOLD_LOWERCASE" ]; then
+              echo "FAIL $base: strings frida=$cf > $THRESHOLD_LOWERCASE"
+              fail=1
+            fi
+          done
+          if [ $fail -ne 0 ]; then
+            echo ""
+            echo "Residual gate failed. See README iOS detection-vector"
+            echo "matrix; floor is dictated by D-Bus protocol identifiers"
+            echo "and the Frida.* Vala namespace tree."
+            exit 1
+          fi
+          echo "Residual gate OK"
 
       - name: Upload gadget artifacts
         uses: actions/upload-artifact@v4
