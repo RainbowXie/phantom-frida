@@ -164,16 +164,24 @@ frida -H 127.0.0.1:27142 -f com.example.app
 
 ### iOS (Dopamine / rootless)
 
+When both `ios-arm64,ios-arm64e` are built, an additional `ios-universal` fat binary is produced — a single file that loads on both A11- (arm64) and A12+ (arm64e PAC00). Use it unless you have a reason to ship per-arch slices.
+
 ```bash
 DEVICE=root@192.168.x.x
 
 # Server (jailbroken only) — rootless paths under /var/jb/
-scp output/myserver-server-17.7.2-ios-arm64e $DEVICE:/var/jb/usr/sbin/myserver-server
-ssh $DEVICE "chmod +x /var/jb/usr/sbin/myserver-server && /var/jb/usr/sbin/myserver-server -D &"
-frida-ps -H ${DEVICE#root@}:27042
+scp output/myserver-server-17.7.2-ios-universal $DEVICE:/var/jb/usr/sbin/myserver-server
+ssh $DEVICE "chmod +x /var/jb/usr/sbin/myserver-server && /var/jb/usr/sbin/myserver-server -l 0.0.0.0:27145 &"
+frida-ps -H ${DEVICE#root@}:27145
 
-# Gadget — drop into target app's Frameworks (jailbroken Tweak) or repackaged IPA
-scp output/myserver-gadget-17.7.2-ios-arm64e.dylib $DEVICE:/var/jb/usr/lib/libmyserver-gadget.dylib
+# Gadget — drop into target app via DYLD_INSERT_LIBRARIES, MobileSubstrate, or repackaged IPA
+scp output/myserver-gadget-17.7.2-ios-universal.dylib $DEVICE:/var/jb/usr/lib/libmyserver-gadget.dylib
+# Config file path: <basename>.config (no .dylib suffix)
+ssh $DEVICE "cat > /var/jb/usr/lib/libmyserver-gadget.config <<'EOF'
+{ \"interaction\": { \"type\": \"listen\", \"address\": \"0.0.0.0\", \"port\": 27146, \"on_load\": \"resume\" } }
+EOF"
+ssh $DEVICE "DYLD_INSERT_LIBRARIES=/var/jb/usr/lib/libmyserver-gadget.dylib /var/jb/usr/bin/sleep 600 &"
+frida-ps -H ${DEVICE#root@}:27146   # → "Gadget"
 ```
 
 Each weekly release includes a `build-info.json` with the name, port, version, and architecture.
