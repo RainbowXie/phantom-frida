@@ -347,7 +347,7 @@ def get_binary_string_patches(name: str) -> list[tuple[str, str, str]]:
     """
     # "frida\0" (5 chars + null = 6 bytes) -> "libgc\0" (looks like GC lib reference)
     # Same length, won't corrupt binary
-    return [
+    patches: list[tuple[str, str, str]] = [
         ("667269646100", "6c6962676300",
          'residual "frida\\0" -> "libgc\\0"'),
         # NOTE: "Frida\0" (capital F) is NOT patched here.
@@ -360,6 +360,28 @@ def get_binary_string_patches(name: str) -> list[tuple[str, str, str]]:
         ("465249444100", "58424e444c00",
          'residual "FRIDA\\0" -> "XBNDL\\0"'),
     ]
+
+    # PascalCase compounds: `FridaAgent`, `FridaGadgetSession`, etc.
+    # These end up in the binary as Vala-generated GType names (e.g.
+    # `g_type_register_static(..., "FridaAgentSession", ...)`). They are
+    # *separate* from the JS-runtime global `Frida\0` (which we keep).
+    # Match `Frida` followed by an uppercase letter (PascalCase boundary)
+    # and replace the 5-byte `Frida` prefix with `<Cap><name[1:5]>` —
+    # length-preserved so the byte sweep stays size-equal. Only emit
+    # patches when the custom name is at least 5 chars (otherwise we
+    # cannot build a 5-byte same-length prefix).
+    if len(name) >= 5:
+        alt_prefix = (name[0].upper() + name[1:5]).encode("ascii")
+        if len(alt_prefix) == 5:
+            alt_hex = alt_prefix.hex()
+            for c in "ABCDEFGHIJKLMNOPQRSTUVWXYZ":
+                c_hex = format(ord(c), "02x")
+                old_hex = "4672696461" + c_hex   # "Frida" + c
+                new_hex = alt_hex + c_hex
+                patches.append((old_hex, new_hex,
+                                f'residual "Frida{c}" -> "{alt_prefix.decode()}{c}"'))
+
+    return patches
 
 
 # ============================================================================
