@@ -115,7 +115,10 @@ Not yet covered (planned):
 
 Server-attach mode (regardless of branding) is rejected because the detection vector is the attach itself (`task_for_pid` / `ptrace` / debugger-presence checks), not the binary's strings. Gadget mode loads at launch via the standard tweak path, which Snapchat's anti-detection does not flag.
 
-`_dyld_image_count` + `_dyld_get_image_name` enumeration *can* see the gadget's on-disk path. Name the deployed dylib without a `frida` / `Frida` substring (e.g. `PixelTrace.dylib`) so that path-based substring scans don't match. Path component `/TweakInject/` remains a substrate-platform fingerprint independent of phantom-frida.
+`_dyld_image_count` + `_dyld_get_image_name` enumeration *can* see the gadget's on-disk path. Two layered defenses:
+
+1. **Static** — name the deployed dylib without a `frida` / `Frida` substring (e.g. `PixelTrace.dylib`). Path-based substring scans no longer match.
+2. **Active** — load [`scripts/ios/hide-from-dyld.js`](scripts/ios/hide-from-dyld.js) into the gadget. It hooks `_dyld_get_image_name` to redirect any index pointing at the gadget to a benign system framework entry (e.g. `Foundation.framework/Foundation`). After the hook, public dyld enumeration shows zero matches for `PixelTrace`/`ajeossida`/`libfrida`/`libgum`. Path component `/TweakInject/` remains a substrate-platform fingerprint independent of phantom-frida.
 
 ### iOS verification log
 
