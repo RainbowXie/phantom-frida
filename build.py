@@ -812,12 +812,20 @@ def sweep_macho_symbols(binary: Path, custom_name: str):
         log(f"    Mach-O symbol sweep: {replaced} byte replacements across {len(syms)} symbol names", "OK")
 
 
-def codesign_adhoc(path: Path):
+def codesign_adhoc(path: Path, identifier: str | None = None):
     """Re-apply ad-hoc signature. Must be the last step in the iOS post-process
     chain — install_name_tool / byte patches / symbol sweep all invalidate it.
+
+    Pass `identifier` to override the codesign identifier — without this,
+    codesign reuses the existing one (which Frida's modulator sets to
+    `libfrida-gadget-modulated-<hash>`, leaking the original name).
     """
-    log(f"    codesign --force --sign - {path.name}", "STEP")
-    run(f"codesign --force --sign - {path}", check=False)
+    cmd = "codesign --force --sign -"
+    if identifier:
+        cmd += f" --identifier {identifier}"
+    cmd += f" {path}"
+    log(f"    {cmd.split(' ', 1)[1]} {path.name}", "STEP")
+    run(cmd, check=False)
 
 
 def collect_artifacts(frida_dir: Path, arch: str, custom_name: str,
@@ -861,7 +869,7 @@ def collect_artifacts(frida_dir: Path, arch: str, custom_name: str,
         shutil.copy2(src, out_bin)
         os.chmod(out_bin, 0o755)
 
-    def post_process(binary: Path, *, is_dylib: bool):
+    def post_process(binary: Path, *, is_dylib: bool, codesign_identifier: str | None = None):
         """iOS: install_name_tool -> byte patches -> symbol sweep -> codesign.
         Android: byte patches only. Order matters — codesign must be last.
         """
@@ -870,7 +878,7 @@ def collect_artifacts(frida_dir: Path, arch: str, custom_name: str,
                 fix_macho_install_name(binary, custom_name)
             apply_binary_patches(binary, custom_name, extended)
             sweep_macho_symbols(binary, custom_name)
-            codesign_adhoc(binary)
+            codesign_adhoc(binary, identifier=codesign_identifier)
         else:
             apply_binary_patches(binary, custom_name, extended)
 
@@ -883,7 +891,8 @@ def collect_artifacts(frida_dir: Path, arch: str, custom_name: str,
     ])
     if server:
         log(f"  Server: {server.name}", "OK")
-        post_process(server, is_dylib=False)
+        post_process(server, is_dylib=False,
+                     codesign_identifier=f"{custom_name}-server")
         save_artifact(server, f"{custom_name}-server-{version}-{os_tag}-{arch_short}")
     else:
         log("  Server: NOT FOUND", "ERROR")
@@ -898,7 +907,8 @@ def collect_artifacts(frida_dir: Path, arch: str, custom_name: str,
     ])
     if agent:
         log(f"  Agent: {agent.name}", "OK")
-        post_process(agent, is_dylib=(lib_ext == "dylib"))
+        post_process(agent, is_dylib=(lib_ext == "dylib"),
+                     codesign_identifier=f"lib{custom_name}-agent")
 
     # --- Gadget ---
     gadget = find_artifact("lib/gadget", [
@@ -909,7 +919,8 @@ def collect_artifacts(frida_dir: Path, arch: str, custom_name: str,
     ])
     if gadget:
         log(f"  Gadget: {gadget.name}", "OK")
-        post_process(gadget, is_dylib=(lib_ext == "dylib"))
+        post_process(gadget, is_dylib=(lib_ext == "dylib"),
+                     codesign_identifier=f"lib{custom_name}-gadget")
         save_artifact(gadget, f"{custom_name}-gadget-{version}-{os_tag}-{arch_short}.{lib_ext}")
 
 

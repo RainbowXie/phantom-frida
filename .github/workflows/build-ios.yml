@@ -165,18 +165,18 @@ jobs:
         with:
           name: ${{ inputs.custom_name }}-gadget-ios-${{ inputs.frida_version }}
           path: |
-            output/*-gadget-ios-*.dylib
-            output/*-gadget-ios-*.dylib.gz
+            output/*-gadget-*-ios-*.dylib
+            output/*-gadget-*-ios-*.dylib.gz
           retention-days: 30
           if-no-files-found: warn
 
-      - name: Upload server artifacts
+      - name: Upload server artifacts (uncompressed)
         uses: actions/upload-artifact@v4
         with:
           name: ${{ inputs.custom_name }}-server-ios-${{ inputs.frida_version }}
           path: |
-            output/*-server-ios-*
-            !output/*-server-ios-*.gz
+            output/*-server-*-ios-*
+            !output/*.gz
           retention-days: 30
           if-no-files-found: warn
 
@@ -184,6 +184,6 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: ${{ inputs.custom_name }}-server-ios-${{ inputs.frida_version }}-gz
-          path: output/*-server-ios-*.gz
+          path: output/*-server-*-ios-*.gz
           retention-days: 30
           if-no-files-found: ignore
