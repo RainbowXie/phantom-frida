@@ -107,13 +107,23 @@ Not yet covered (planned):
 
 ### iOS hostile-app comparison: Snapchat 13.77.0 on iOS 16.1
 
-| Injection | Snapchat | Detection-trigger |
-|---|---|---|
-| Upstream `frida-server` 17.9.1 (`frida -H -f com.toyopagroup.picaboo`) | dies <1 s after resume | yes |
-| `ajeossida-server` 17.7.2 (entitlements copied + `application-identifier` renamed to `re.ajeossida.Server`) | dies <1 s after resume | yes (same trigger) |
-| `ajeossida-gadget.dylib` loaded by ElleKit/Substitute filter `Bundles=[com.toyopagroup.picaboo]` | **alive, scriptable** | no |
+| Flow | Upstream `frida-server` 17.9.1 | `ajeossida-server` 17.7.2 | Survives? |
+|---|---|---|---|
+| `frida -H -f bundle` (spawn + immediate attach + resume) | dies <1 s | dies <1 s | ✗ |
+| `device.spawn() + device.resume()` only — no attach | 8 s+ alive | 8 s+ alive | ✓ (no agent, no instrumentation) |
+| `spawn() + resume() + sleep 10 s + late attach()` | 4 s+ alive after attach | 4 s+ alive after attach | ✓ (full Frida) |
+| substrate-loaded gadget (`Bundles=[com.toyopagroup.picaboo]`) | n/a | persistent control | ✓ (no attach, no detection) |
 
-Server-attach mode (regardless of branding) is rejected because the detection vector is the attach itself (`task_for_pid` / `ptrace` / debugger-presence checks), not the binary's strings. Gadget mode loads at launch via the standard tweak path, which Snapchat's anti-detection does not flag.
+Two findings worth pinning down:
+
+1. **The detection is at the attach itself, not the binary.** Phantom-ising the server binary (renaming strings, codesign identifier, install_name) does not change the answer. Both servers fail and both succeed in identical scenarios.
+2. **Snapchat's tracer-presence check appears to be a one-shot during startup.** Attaching after the app has finished launching no longer trips it, even though the agent dylib gets loaded the same way.
+
+Practical paths for hostile apps:
+
+- `scripts/ios/late-attach.py` — spawn, resume, sleep N seconds, then attach. Works on both servers; you lose startup-time hooks but everything after is yours.
+- substrate/elleKit gadget tweak — loads at launch, full coverage including init. The gadget dylib must not contain `frida` / `Frida` in its on-disk name (substring scans), which is why the verification deployment used `PixelTrace.dylib`.
+- `scripts/ios/hide-from-dyld.js` — load into the gadget session to redirect `_dyld_get_image_name(<our index>)` to a benign system framework, dropping the residual dyld-enumeration fingerprint to zero.
 
 `_dyld_image_count` + `_dyld_get_image_name` enumeration *can* see the gadget's on-disk path. Two layered defenses:
 
