@@ -812,6 +812,47 @@ def sweep_macho_symbols(binary: Path, custom_name: str):
         log(f"    Mach-O symbol sweep: {replaced} byte replacements across {len(syms)} symbol names", "OK")
 
 
+def merge_ios_universal(output_dir: Path, ios_archs: list[str],
+                         custom_name: str, version: str):
+    """Combine per-arch iOS slices into a single fat binary via `lipo -create`.
+    Re-codesigns ad-hoc afterwards (lipo invalidates the existing signature).
+    Skipped when only one iOS arch was built — there's nothing to merge.
+    """
+    arch_shorts = [a.replace("ios-", "") for a in ios_archs]
+
+    targets = [
+        ("server", f"{custom_name}-server-{version}-ios-{{arch}}",
+         f"{custom_name}-server-{version}-ios-universal",
+         f"{custom_name}-server"),
+        ("gadget", f"{custom_name}-gadget-{version}-ios-{{arch}}.dylib",
+         f"{custom_name}-gadget-{version}-ios-universal.dylib",
+         f"lib{custom_name}-gadget"),
+    ]
+
+    for label, per_arch_pat, out_name, codesign_id in targets:
+        slices = [output_dir / per_arch_pat.format(arch=s) for s in arch_shorts]
+        missing = [str(p) for p in slices if not p.is_file()]
+        if missing:
+            log(f"  {label}: skipping universal — missing {missing}", "WARN")
+            continue
+
+        out_path = output_dir / out_name
+        slice_args = " ".join(str(p) for p in slices)
+        log(f"  lipo -create {slice_args} -output {out_path.name}", "STEP")
+        run(f"lipo -create {slice_args} -output {out_path}", check=True)
+        os.chmod(out_path, 0o755)
+
+        # lipo invalidates ad-hoc signatures of the input slices when fusing.
+        codesign_adhoc(out_path, identifier=codesign_id)
+
+        # Compressed sibling (matches per-arch convention)
+        out_gz = output_dir / f"{out_name}.gz"
+        with open(out_path, "rb") as f_in, gzip.open(out_gz, "wb") as f_out:
+            shutil.copyfileobj(f_in, f_out)
+        log(f"    -> {out_path.name} ({out_path.stat().st_size / 1024 / 1024:.1f} MB) "
+            f"+ {out_gz.name} ({out_gz.stat().st_size / 1024 / 1024:.1f} MB)", "OK")
+
+
 def codesign_adhoc(path: Path, identifier: str | None = None):
     """Re-apply ad-hoc signature. Must be the last step in the iOS post-process
     chain — install_name_tool / byte patches / symbol sweep all invalidate it.
@@ -1155,6 +1196,16 @@ Detection vectors covered:
 
         # Collect and binary-patch artifacts
         collect_artifacts(frida_dir, arch, custom_name, version, output_dir, args.extended)
+
+    # Step 5.5: iOS universal (fat) lipo merge — single dylib/server that loads
+    # on both A11- (arm64) and A12+ (arm64e). Only meaningful when both archs
+    # were built; sysctl arch detection on the device picks the right slice.
+    ios_built = [a for a in archs if is_ios_arch(a)]
+    if len(ios_built) >= 2 and sys.platform == "darwin":
+        log("=" * 60, "HEADER")
+        log("Building iOS universal (lipo) artifacts", "STEP")
+        log("=" * 60, "HEADER")
+        merge_ios_universal(output_dir, ios_built, custom_name, version)
 
     # Step 6: Verification
     if args.verify:

@@ -133,6 +133,13 @@ jobs:
           done
 
           echo ""
+          echo "=== Universal slice listing (lipo -info) ==="
+          for f in output/*ios-universal*.dylib output/*ios-universal; do
+            [ -f "$f" ] || continue
+            lipo -info "$f"
+          done
+
+          echo ""
           echo "=== install_name (LC_ID_DYLIB) ==="
           for f in output/*.dylib; do
             [ -f "$f" ] || continue
