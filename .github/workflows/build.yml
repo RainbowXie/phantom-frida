@@ -77,13 +77,20 @@ jobs:
             https://dl.google.com/android/repository/android-ndk-r29-linux.zip
           cd build && unzip -q android-ndk-r29-linux.zip && rm android-ndk-r29-linux.zip
 
-      # Cache Frida source tree — saves ~5 min clone time
+      # Cache Frida source tree — saves ~5 min clone time.
+      # The `-android` suffix is required: actions/cache@v4 does prefix-based
+      # restore-key fallback by default, so a sibling key like
+      # `frida-<ver>-source-ios` (saved by build-ios.yml) would partially
+      # match `frida-<ver>-source` here, restoring the iOS cache into
+      # build/frida while reporting cache-hit=false. The Clone step would
+      # then run on top of an existing directory and fail. Disjoint keys
+      # avoid the collision.
       - name: Cache Frida source
         uses: actions/cache@v4
         id: frida-cache
         with:
           path: build/frida
-          key: frida-${{ inputs.frida_version }}-source
+          key: frida-${{ inputs.frida_version }}-source-android
 
       - name: Clone Frida
         if: steps.frida-cache.outputs.cache-hit != 'true'
