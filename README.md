@@ -105,6 +105,18 @@ Not yet covered (planned):
 - universal `lipo` arm64 + arm64e merging — currently two separate dylib files
 - Apple Developer codesign for non-jailbroken IPA repackaging — current ad-hoc signature is only valid on jailbroken devices
 
+### iOS hostile-app comparison: Snapchat 13.77.0 on iOS 16.1
+
+| Injection | Snapchat | Detection-trigger |
+|---|---|---|
+| Upstream `frida-server` 17.9.1 (`frida -H -f com.toyopagroup.picaboo`) | dies <1 s after resume | yes |
+| `ajeossida-server` 17.7.2 (entitlements copied + `application-identifier` renamed to `re.ajeossida.Server`) | dies <1 s after resume | yes (same trigger) |
+| `ajeossida-gadget.dylib` loaded by ElleKit/Substitute filter `Bundles=[com.toyopagroup.picaboo]` | **alive, scriptable** | no |
+
+Server-attach mode (regardless of branding) is rejected because the detection vector is the attach itself (`task_for_pid` / `ptrace` / debugger-presence checks), not the binary's strings. Gadget mode loads at launch via the standard tweak path, which Snapchat's anti-detection does not flag.
+
+`_dyld_image_count` + `_dyld_get_image_name` enumeration *can* see the gadget's on-disk path. Name the deployed dylib without a `frida` / `Frida` substring (e.g. `PixelTrace.dylib`) so that path-based substring scans don't match. Path component `/TweakInject/` remains a substrate-platform fingerprint independent of phantom-frida.
+
 ### iOS verification log
 
 Verified end-to-end on iPhone 14 (A15, arm64e), iOS 16.1, Dopamine rootless:
