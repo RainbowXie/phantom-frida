@@ -61,21 +61,40 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y build-essential curl git python3 unzip
 
-      # Cache NDK (~1.5 GB) — saves ~3 min on subsequent runs
+      # Pick the NDK version that matches the requested Frida version.
+      # Frida's `./configure` script enforces an exact NDK match: 17.7.x
+      # rejects anything other than r25c, while 17.9.x requires r29.
+      # The upstream Android workflow bumped to r29 along with the 17.9.x
+      # weekly schedule, but this fork keeps both Frida versions reachable
+      # via workflow_dispatch input, so we resolve NDK at workflow time.
+      - name: Resolve NDK version
+        id: ndk
+        run: |
+          case "${{ inputs.frida_version }}" in
+            17.7.*|17.6.*) NDK=r25c ;;
+            *)             NDK=r29  ;;
+          esac
+          echo "version=$NDK" >> $GITHUB_OUTPUT
+          echo "Using NDK $NDK for Frida ${{ inputs.frida_version }}"
+
+      # Cache NDK (~1.5 GB) — saves ~3 min on subsequent runs.
+      # Cache key includes the NDK version so different Frida releases
+      # don't clobber each other.
       - name: Cache NDK
         uses: actions/cache@v4
         id: ndk-cache
         with:
-          path: build/android-ndk-r29
-          key: ndk-r29-linux
+          path: build/android-ndk-${{ steps.ndk.outputs.version }}
+          key: ndk-${{ steps.ndk.outputs.version }}-linux
 
       - name: Download NDK
         if: steps.ndk-cache.outputs.cache-hit != 'true'
         run: |
+          NDK=${{ steps.ndk.outputs.version }}
           mkdir -p build
-          curl -L -o build/android-ndk-r29-linux.zip \
-            https://dl.google.com/android/repository/android-ndk-r29-linux.zip
-          cd build && unzip -q android-ndk-r29-linux.zip && rm android-ndk-r29-linux.zip
+          curl -L -o build/android-ndk-$NDK-linux.zip \
+            https://dl.google.com/android/repository/android-ndk-$NDK-linux.zip
+          cd build && unzip -q android-ndk-$NDK-linux.zip && rm android-ndk-$NDK-linux.zip
 
       # Cache Frida source tree — saves ~5 min clone time.
       # The `-android` suffix is required: actions/cache@v4 does prefix-based
@@ -115,7 +134,7 @@ jobs:
           CMD="python3 build.py --version ${{ inputs.frida_version }}"
           CMD="$CMD --name ${{ inputs.custom_name }}"
           CMD="$CMD --arch ${{ inputs.arch }}"
-          CMD="$CMD --skip-clone --ndk-path build/android-ndk-r29"
+          CMD="$CMD --skip-clone --ndk-path build/android-ndk-${{ steps.ndk.outputs.version }}"
           CMD="$CMD --verify"
 
           if [ -n "${{ inputs.port }}" ]; then
