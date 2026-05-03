@@ -1,6 +1,8 @@
 # phantom-frida
 
-Build anti-detection Frida server from source. Covers 16 Android detection vectors with ~90 patches, plus an iOS path producing phantom-ised gadget dylib + server (Mach-O `install_name` rewrite, ad-hoc codesign, symbol-table sweep).
+Build anti-detection Frida server from source. Covers 16 Android detection vectors plus 7 iOS-specific ones, ~95 patch rules, with a CI residual gate that fails the build if the rename floor regresses.
+
+iOS path produces phantom-ised gadget dylib + server (Mach-O `install_name` rewrite, ad-hoc codesign with custom identifier, `nm`-driven symbol-table sweep, length-preserving 26-pattern `Frida[A-Z]` PascalCase byte sweep, `/frida/runtime/` asset-path rewrite). Android path keeps the original 16-vector coverage and now ships a 4-arch (arm64 / arm / x86_64 / x86) build.
 
 Extended beyond [ajeossida](https://github.com/hackcatml/ajeossida) with additional stealth techniques: custom port, binary string sweep, internal symbol renaming, temp path obfuscation, and more.
 
@@ -170,14 +172,26 @@ frida-ps -H ${DEVICE#root@}:27146   # → "Gadget"
 ## Architecture
 
 ```
-build.py                Main build script (clone, patch, compile, collect)
-patches.py              All patch definitions (87 patches + 17 rollbacks)
-namegen.py              Random name/port generator for stealth builds
-build-wsl.sh            WSL helper script
-test_comprehensive.js   Anti-detection + Java bridge verification script
+build.py                Main build script (clone, patch, compile, collect).
+                        Includes the iOS post-process chain (install_name_tool
+                        -> byte patches -> Mach-O symbol sweep -> codesign)
+                        and per-arch build/ wiping for multi-arch loops.
+patches.py              ~95 patch rules: 40 source + 17 rollback + 3 binary
+                        thread-name + 28 binary string sweep (incl. 26-letter
+                        PascalCase Frida[A-Z]) + 4 internal + 3 temp-path,
+                        plus version-specific MEMFD / LIBC_HOOK / SELINUX
+                        and per-target meson rules.
+namegen.py              Random name/port generator for stealth builds (CLI).
+build-wsl.sh            WSL Ubuntu helper for local Android builds.
+tests/test_patches.py   18 unittests asserting patches.py invariants
+                        (no duplicates, length-preserving binary patches,
+                        full PascalCase coverage, /frida/ stays 7 bytes).
+test_comprehensive.js   Runtime anti-detection + Java bridge probe (Android).
 .github/workflows/
-  build.yml             Android manual build workflow
-  build-ios.yml         iOS manual build workflow (macos-14 runner)
+  build.yml             Android manual build (Ubuntu, NDK auto-selected).
+  build-ios.yml         iOS manual build (macos-14, Xcode CLT). Includes a
+                        Residual regression gate: Frida[A-Z]=0 / nm -gU
+                        _frida*=0 / lowercase frida <= 80.
 ```
 
 ## Requirements
