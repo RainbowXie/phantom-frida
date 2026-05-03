@@ -112,7 +112,21 @@ Verified end-to-end on iPhone 14 (A15, arm64e), iOS 16.1, Dopamine rootless:
 - Build: `gh workflow run "Build iOS dylib" -f arch=ios-arm64,ios-arm64e` produces gadget dylib + server for both archs in ~12 min (cache-hit rebuild).
 - Static: Mach-O 64-bit arm64e (caps PAC00), `install_name=@rpath/libajeossida-gadget.dylib`, `Signature=adhoc Identifier=libajeossida-gadget`, `nm -gU` exported `_frida*` count = 0, `strings | grep '\bFrida[A-Z]'` = 0.
 - Deploy: `scp` to `/var/jb/usr/sbin/ajeossida-server` and `/var/jb/usr/lib/libajeossida-gadget.dylib`.
-- Runtime: `ajeossida-server -l 0.0.0.0:27145` starts cleanly; `frida-ps -H ...:27145` lists 372 processes; `frida -H ...:27145 -p PID --eval 'Frida.version'` returns `"17.7.2"` — JS runtime intact.
+- Runtime (server): `ajeossida-server -l 0.0.0.0:27145` starts cleanly; `frida-ps -H ...:27145` lists 372 processes; `frida -H ...:27145 -p PID --eval 'Frida.version'` returns `"17.7.2"` — JS runtime intact.
+- Runtime (gadget): drop the dylib at `/var/jb/usr/lib/libajeossida-gadget.dylib` plus a config at `/var/jb/usr/lib/libajeossida-gadget.config` (note: basename without `.dylib`, plus `.config` — not `.dylib.config`). Inject via `DYLD_INSERT_LIBRARIES=/var/jb/usr/lib/libajeossida-gadget.dylib /var/jb/usr/bin/sleep 120 &`, then `frida-ps -H ...:27146` reports `27294 Gadget` and a script eval returns the expected payload — gadget mode confirmed.
+
+```json
+// libajeossida-gadget.config (listen mode)
+{
+  "interaction": {
+    "type": "listen",
+    "address": "0.0.0.0",
+    "port": 27146,
+    "on_port_conflict": "fail",
+    "on_load": "resume"
+  }
+}
+```
 
 ## Options
 
