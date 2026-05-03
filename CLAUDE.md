@@ -56,7 +56,9 @@
 
 ## 默认参数
 
-- Frida 版本：`17.7.2`（同上游 build.yml 默认）
+- Frida 版本：`17.9.1`（同上游 weekly tag）
+  - 17.9.x → NDK r29
+  - 17.7.x / 17.6.x → NDK r25c（workflow 自动按版本选）
 - 自定义名：`ajeossida`（与 `frida` 等长，便于二进制等长替换；想换其他名需保证 5 字符）
 - 默认端口：`27042`（Frida 默认，可用 `--port` 改）
 - 反检测档位：`--extended` 默认开（D-Bus、符号、binary sweep）

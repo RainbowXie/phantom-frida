@@ -4,9 +4,9 @@ on:
   workflow_dispatch:
     inputs:
       frida_version:
-        description: 'Frida version (e.g. 17.7.2)'
+        description: 'Frida version (e.g. 17.9.1)'
         required: true
-        default: '17.7.2'
+        default: '17.9.1'
       custom_name:
         description: 'Custom name (replaces "frida" everywhere)'
         required: true
