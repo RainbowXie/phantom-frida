@@ -99,12 +99,27 @@ def get_source_patches(name: str, cap_name: str) -> list[tuple[str, str]]:
 
         # --- Misc Frida-prefixed string literals visible in `strings` output ---
         # GLib error quark name (xpc.vala:246 Quark.from_string("frida-error-quark")).
+        # The Vala compiler ALSO autogenerates this same literal as part of
+        # the `Frida.Error` enum's generated `frida_error_quark()` body — that
+        # second occurrence only appears under build/ and is caught by the
+        # post-build sweep, not this source-tree pass.
         ('"frida-error-quark"', f'"{name}-error-quark"'),
         # Error message in lib/payload/portal-client.vala — the "frida-gadget"
         # token here is *inside* a longer string and is not caught by the bare
         # `"frida-gadget"` double-quoted pattern above.
         ("Emulated realm is not supported by frida-gadget",
          f"Emulated realm is not supported by {name}-gadget"),
+        # Sibling error message in the same file for the portal flow.
+        ("Session migration is not supported with frida-portal",
+         f"Session migration is not supported with {name}-portal"),
+        # p2p.vala:892 thread name for the certificate generator helper.
+        ('"frida-generate-certificate"', f'"{name}-generate-certificate"'),
+        # libc-shim.c:1188 g_file_open_tmp template; preserve the 6-X random
+        # suffix marker so glib still substitutes random chars in place.
+        ('"frida-XXXXXX"', f'"{name}-XXXXXX"'),
+        # tunnel-interface-observer.vala:7 GCD dispatch-queue label
+        # (NOT a D-Bus interface — purely a thread label, safe to rename).
+        ('"re.frida.endpoint-enumerator"', f'"re.{name}.endpoint-enumerator"'),
     ]
 
     # gum-js-runtime asset paths and gumcmodule TCC virtual include paths use a
